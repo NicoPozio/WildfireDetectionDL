@@ -10,13 +10,21 @@ from models import WildfireResNet, SimpleCNN
 from dataset import get_dataloaders
 from utils import seed_everything
 
-@hydra.main(version_base=None, config_path="../conf", config_name="config")
+
+
+@hydra.main(version_base=None, config_path="conf", config_name="config") # Ensure path is correct relative to script
 def main(cfg: DictConfig):
     seed_everything(cfg.training.seed)
     
-    # Init WandB
-    wandb.init(project=cfg.wandb.project, config=dict(cfg), mode=cfg.wandb.mode)
-    
+    # --- FIX 1: Proper Configuration Serialization ---
+    # resolve=True ensures calculations (like ${training.batch_size}) are fixed values
+    wandb_config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
+
+    wandb.init(
+        project=cfg.wandb.project, 
+        config=wandb_config,  # Pass the clean dict, not the DictConfig object
+        mode=cfg.wandb.mode
+    )
     device = torch.device(cfg.training.device if torch.cuda.is_available() else "cpu")
     print(f"Training on {device} using model: {cfg.model.name}")
 
@@ -79,11 +87,17 @@ def main(cfg: DictConfig):
         wandb.log(metrics)
         print(f"   Acc: {metrics['train_acc']:.2f}% | Val Acc: {metrics['val_acc']:.2f}%")
 
-        # Save Best
+        # --- RECOMMENDATION: Save model with a unique name ---
+    # Using "best_model.pth" can get overwritten if you run multiple experiments in the same folder.
+    # Hydra changes directories automatically, so you are likely safe, but explicit naming is better.
+        model_name = f"{cfg.model.name}_best.pth"
+    
         if metrics['val_acc'] > best_val_acc:
             best_val_acc = metrics['val_acc']
-            torch.save(model.state_dict(), "best_model.pth")
-            wandb.save("best_model.pth")
+            torch.save(model.state_dict(), model_name)
+        
+            # Save to WandB cloud so you don't lose it if Colab disconnects
+            wandb.save(model_name) 
 
     print("Training Complete.")
 
