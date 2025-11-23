@@ -15,6 +15,7 @@ def get_dataloaders(cfg):
     try:
         real_train_ds = datasets.ImageFolder(cfg.dataset.real_train_path, transform=transform)
         val_ds = datasets.ImageFolder(cfg.dataset.val_path, transform=transform)
+        test_ds = datasets.ImageFolder(cfg.dataset.test_path, transform=transform)
     except FileNotFoundError as e:
         print(f" Error loading data: {e}")
         return None, None
@@ -36,8 +37,9 @@ def get_dataloaders(cfg):
         print("BASELINE MODE: Using only Real data.")
         train_ds = real_train_ds
 
-    # Dataloaders
+    # Dataloaders (numworkers should be defined in conf)
     train_loader = DataLoader(train_ds, batch_size=cfg.training.batch_size, shuffle=True, num_workers=2)
     val_loader = DataLoader(val_ds, batch_size=cfg.training.batch_size, shuffle=False, num_workers=2)
+    test_loader = DataLoader(test_ds, batch_size=cfg.training.batch_size, shuffle=False, num_workers=2)
 
     return train_loader, val_loader
