@@ -3,6 +3,8 @@ import numpy as np
 import random
 import os
 import zipfile
+from tqdm import tqdm  #Progress bars
+
 
 def seed_everything(seed):
     random.seed(seed)
