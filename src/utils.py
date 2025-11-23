@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import random
 import os
+import zipfile
 
 def seed_everything(seed):
     random.seed(seed)
