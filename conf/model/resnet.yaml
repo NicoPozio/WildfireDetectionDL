@@ -1,0 +1,4 @@
+name: resnet50
+num_classes: 2
+pretrained: true
+dropout: 0.5
