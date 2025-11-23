@@ -1,0 +1,21 @@
+defaults:
+  - model: resnet
+  - dataset: wildfire
+  - _self_
+
+hydra:
+  run:
+    dir: ./outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+training:
+  epochs: 20
+  batch_size: 32
+  learning_rate: 0.001
+  device: "cuda"
+  seed: 42
+  early_stopping_patience: 5
+
+wandb:
+  project: "wildfire-detection"
+  entity: null  # Set your username if needed
+  mode: "online"
