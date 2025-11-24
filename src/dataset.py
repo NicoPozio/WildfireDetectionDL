@@ -1,106 +1,108 @@
 import os
 import torch
-from torch.utils.data import DataLoader, ConcatDataset
+import glob
+from torch.utils.data import DataLoader, ConcatDataset, Dataset
 from torchvision import datasets, transforms
+from PIL import Image
 from typing import Tuple, Optional
 
 # ---------------------------------------------------------
-# Custom Dataset Class
+# Robust Synthetic Dataset Class
 # ---------------------------------------------------------
-class EnforcedMapDataset(datasets.ImageFolder):
+class SyntheticWildfireDataset(Dataset):
     """
-    An extension of ImageFolder that forces a specific class-to-index mapping.
-    This prevents 'Index Shifting' when a folder (like 'nowildfire') is empty
-    in the synthetic dataset.
+    Specifically designed to load ONLY wildfire images from the synthetic folder
+    and ignore the empty 'nowildfire' folder.
+    It forces the label to be 1 (Wildfire).
     """
-    def __init__(self, root, transform=None, forced_class_to_idx=None):
-        self.forced_class_to_idx = forced_class_to_idx
-        super().__init__(root, transform=transform)
-
-    def find_classes(self, directory: str) -> Tuple[list, dict]:
-        if self.forced_class_to_idx is None:
-            return super().find_classes(directory)
+    def __init__(self, root_dir, transform=None):
+        self.root_dir = root_dir
+        self.transform = transform
+        # 1. We look specifically inside the 'wildfire' subfolder
+        # This bypasses the empty 'nowildfire' folder entirely.
+        target_folder = os.path.join(root_dir, "wildfire")
         
-        # Return the classes explicitly defined by the Real Dataset
-        classes = list(self.forced_class_to_idx.keys())
-        return classes, self.forced_class_to_idx
+        # 2. Find all images (png, jpg, jpeg)
+        self.image_paths = []
+        if os.path.exists(target_folder):
+            for ext in ["*.png", "*.jpg", "*.jpeg"]:
+                self.image_paths.extend(glob.glob(os.path.join(target_folder, ext)))
+        
+        print(f"   -> Found {len(self.image_paths)} synthetic wildfire images.")
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        img_path = self.image_paths[idx]
+        # Open image
+        image = Image.open(img_path).convert('RGB')
+        
+        # Apply transforms
+        if self.transform:
+            image = self.transform(image)
+            
+        # FORCE LABEL 1 (Wildfire)
+        # We know these are all fires, so we hardcode the 1.
+        return image, 1
 
 # ---------------------------------------------------------
 # Main Loader Logic
 # ---------------------------------------------------------
 def get_dataloaders(cfg):
-    """
-    Constructs DataLoaders for Train, Validation, and Test sets.
-    Handles dynamic augmentation and synthetic data injection.
-    """
-    
     input_size = tuple(cfg.dataset.params.input_size)
     mean = cfg.dataset.params.mean
     std = cfg.dataset.params.std
     
-    # 1. Training Transform (Includes Augmentation)
-    # Uses rotation defined in config/sweep
+    # 1. Transforms
     train_transform = transforms.Compose([
         transforms.Resize(256),
-        transforms.CenterCrop(224),
+        transforms.CenterCrop(224)
         transforms.RandomRotation(degrees=cfg.dataset.augmentation.rotation_degrees),
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.ToTensor(),
         transforms.Normalize(mean, std)
     ])
 
-    # 2. Validation/Test Transform (No Augmentation)
-    # Only Resize and Normalize ensures fair evaluation
     eval_transform = transforms.Compose([
         transforms.Resize(input_size),
         transforms.ToTensor(),
         transforms.Normalize(mean, std)
     ])
 
-    # 3. Load Real Data (The Master Source)
+    # 2. Load Real Data
     try:
         real_train_ds = datasets.ImageFolder(cfg.dataset.paths.real_train_path, transform=train_transform)
         val_ds = datasets.ImageFolder(cfg.dataset.paths.val_path, transform=eval_transform)
         test_ds = datasets.ImageFolder(cfg.dataset.paths.test_path, transform=eval_transform)
-        
-        # Capture the True Mapping (e.g., {'nowildfire': 0, 'wildfire': 1})
-        master_mapping = real_train_ds.class_to_idx
-        print(f"Real Data Loaded. Class Mapping: {master_mapping}")
-        
-    except FileNotFoundError as e:
+        print(f"Real Data Loaded. Train Size: {len(real_train_ds)}")
+    except Exception as e:
         print(f"CRITICAL ERROR: Could not load real data: {e}")
         return None, None, None
 
-    # 4. Augmentation Logic (Synthetic Injection)
+    # 3. Synthetic Injection
     if cfg.dataset.params.use_synthetic:
-        print(f"AUGMENTATION ON: Injecting synthetic data from {cfg.dataset.paths.synthetic_train_path}")
+        print(f"AUGMENTATION ON: Injecting synthetic data...")
         
-        if os.path.exists(cfg.dataset.paths.synthetic_train_path):
-            try:
-                # Use EnforcedMapDataset to ensure labels match the real data
-                synthetic_ds = EnforcedMapDataset(
-                    root=cfg.dataset.paths.synthetic_train_path,
-                    transform=train_transform,
-                    forced_class_to_idx=master_mapping 
-                )
-                
-                # Merge the datasets
-                train_ds = ConcatDataset([real_train_ds, synthetic_ds])
-                
-                print(f"   -> Added {len(synthetic_ds)} synthetic images.")
-                print(f"   -> Combined Training Set: {len(train_ds)} images.")
-                
-            except Exception as e:
-                print(f"WARNING: Failed to load synthetic data ({e}). Fallback to Real Only.")
-                train_ds = real_train_ds
+        # Use the new Robust Class
+        synthetic_ds = SyntheticWildfireDataset(
+            root_dir=cfg.dataset.paths.synthetic_train_path,
+            transform=train_transform
+        )
+        
+        if len(synthetic_ds) > 0:
+            train_ds = ConcatDataset([real_train_ds, synthetic_ds])
+            print(f"   -> Merged Dataset Size: {len(train_ds)}")
         else:
-            print(f"WARNING: Synthetic path not found. Using only Real data.")
+            print("   WARNING: No synthetic images found. Using Real Only.")
             train_ds = real_train_ds
     else:
         print("BASELINE MODE: Using only Real data.")
         train_ds = real_train_ds
 
-    # 5. Create DataLoaders
+    # 4. DataLoaders
+    # Pin_memory=True is faster on GPU, but crashes on CPU if CUDA is missing.
+    #                                             
     train_loader = DataLoader(train_ds, batch_size=cfg.training.batch_size, shuffle=True, num_workers=cfg.dataset.params.num_workers, pin_memory=True)
     val_loader = DataLoader(val_ds, batch_size=cfg.training.batch_size, shuffle=False, num_workers=cfg.dataset.params.num_workers, pin_memory=True)
     test_loader = DataLoader(test_ds, batch_size=cfg.training.batch_size, shuffle=False, num_workers=cfg.dataset.params.num_workers, pin_memory=True)
