@@ -3,8 +3,8 @@ from omegaconf import DictConfig, OmegaConf
 import torch
 import wandb
 import os
-from src.models import WildfireResNet, SimpleCNN
-from src.dataset import get_dataloaders
+from models import WildfireResNet, SimpleCNN
+from dataset import get_dataloaders
 from sklearn.metrics import classification_report, confusion_matrix, precision_score, recall_score, f1_score, accuracy_score
 import seaborn as sns
 import matplotlib.pyplot as plt
