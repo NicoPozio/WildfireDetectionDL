@@ -1,9 +1,9 @@
 paths:
-  train: "/content/data/dataset/train"
+  real_train_path: "/content/data/dataset/train"
   # Points to the PARENT folder containing 'wildfire' and 'nowildfire'
-  synthetic: "/content/data/synthetic_dataset" 
-  val: "/content/data/dataset/valid"
-  test: "/content/data/dataset/test"
+  synthetic_train_path: "/content/data/synthetic_dataset" 
+  val_path: "/content/data/dataset/valid"
+  test_path: "/content/data/dataset/test"
 
 params:
   input_size: [224, 224]
