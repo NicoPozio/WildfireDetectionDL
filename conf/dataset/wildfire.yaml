@@ -4,5 +4,5 @@ synthetic_train_path: "content/data/synthetic_dataset" # Points to folder contai
 val_path: "content/data/dataset/valid"
 test_path: "content/data/dataset/test"
 
-use_synthetic: false # Toggle to True for Experiment B
-input_size: [224, 224] #MAYBE TO CHANGE
+use_synthetic: false
+input_size: [224, 224] 
