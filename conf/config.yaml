@@ -1,22 +1,42 @@
-defaults:
-  - model: resnet
-  - dataset: wildfire
-  - _self_
+program: train.py
+method: bayes
+metric:
+  name: val_acc
+  goal: maximize
 
-hydra:
-  run:
-    dir: ./outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+parameters:
+  model.name:
+    values: ["resnet50", "simple_cnn"]
+  
+  model.dropout:
+    values: [0.3, 0.5]
 
-training:
-  epochs: 20
-  learning_rate: 0.001
-  batch_size: 32 
-  device: "cuda"
-  seed: 42
-  early_stopping_patience: 5
-  save_dir: "checkpoints" 
+  dataset.params.use_synthetic:
+    values: [true, false]
+  
+  dataset.augmentation.rotation_degrees:
+    distribution: int_uniform
+    min: 0
+    max: 45
 
-wandb:
-  project: "wildfire-detection"
-  entity: null  # Defaults to user who executes the project
-  mode: "online"
+  training.learning_rate:
+    distribution: log_uniform_values
+    min: 0.00001
+    max: 0.01
+
+  training.batch_size:
+    values: [16, 32, 64]
+
+  training.optimizer:
+    values: ["adam", "sgd"]
+
+  training.weight_decay:
+    distribution: log_uniform_values
+    min: 0.000001
+    max: 0.01
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
