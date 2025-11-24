@@ -3,8 +3,8 @@ from omegaconf import DictConfig, OmegaConf
 import torch
 import wandb
 import os
-from models import WildfireResNet, SimpleCNN
-from dataset import get_dataloaders
+from src.models import WildfireResNet, SimpleCNN
+from src.dataset import get_dataloaders
 from sklearn.metrics import classification_report, confusion_matrix, precision_score, recall_score, f1_score, accuracy_score
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -15,29 +15,44 @@ def main(cfg: DictConfig):
     # 1. Setup
     device = torch.device(cfg.training.device if torch.cuda.is_available() else "cpu")
     
-    # Init WandB
+    # Init WandB for the Test Run
     wandb_config = OmegaConf.to_container(cfg, resolve=True)
     wandb.init(project=cfg.wandb.project, config=wandb_config, job_type="test", name="final_evaluation")
 
-    # 2. Data & Model
+    # 2. Data Loading
     print("Loading Test Data...")
-    # Note: We need the cfg here to know if we are using synthetic data or not
-    # even if test set is always real.
+    # We call get_dataloaders to ensure the config context is loaded correctly,
+    # but we only extract the test_loader (3rd return value).
     _, _, test_loader = get_dataloaders(cfg)
     
-    print(f"Initializing Model Architecture: {cfg.model.name}...")
+    # 3. Model Initialization
+    print(f"Initializing Model Architecture: {cfg.model.name}")
     if cfg.model.name == "resnet50":
-        model = WildfireResNet(cfg.model.num_classes, cfg.model.pretrained, cfg.model.dropout)
+        model = WildfireResNet(
+            num_classes=cfg.model.num_classes, 
+            pretrained=cfg.model.pretrained, 
+            dropout=cfg.model.dropout
+        )
+    elif cfg.model.name == "simple_cnn":
+        model = SimpleCNN(
+            num_classes=cfg.model.num_classes, 
+            dropout=cfg.model.dropout
+        )
     else:
-        model = SimpleCNN(cfg.model.num_classes, cfg.model.dropout)
-    
-    # 3. Load Weights safely
-    # We look for the file in the Original Working Directory (Colab root)
-    # because Hydra changes the current directory to a new timestamp folder.
-    load_path = os.path.join(hydra.utils.get_original_cwd(), "best_model.pth")
+        raise ValueError(f"Unknown model name: {cfg.model.name}")
+
+    # 4. Load Weights safely
+    # Hydra changes the current working directory to a timestamped folder.
+    # We need to find 'best_model.pth' in the ORIGINAL working directory (the root of the project).
+    try:
+        orig_cwd = hydra.utils.get_original_cwd()
+        load_path = os.path.join(orig_cwd, "best_model.pth")
+    except Exception:
+        # Fallback if not running under Hydra (e.g., direct execution)
+        load_path = "best_model.pth"
     
     if not os.path.exists(load_path):
-        # Fallback: Check current directory just in case
+        # Fallback check in current directory
         if os.path.exists("best_model.pth"):
             load_path = "best_model.pth"
         else:
@@ -48,7 +63,7 @@ def main(cfg: DictConfig):
     model.to(device)
     model.eval()
 
-    # 4. Inference
+    # 5. Inference Loop
     all_preds = []
     all_labels = []
     
@@ -62,22 +77,28 @@ def main(cfg: DictConfig):
             all_preds.extend(predicted.cpu().numpy())
             all_labels.extend(labels.numpy())
 
-    # 5. Metrics
+    # 6. Metrics Calculation
+    # We assume: 0 = No Wildfire, 1 = Wildfire
     accuracy = accuracy_score(all_labels, all_preds)
     precision = precision_score(all_labels, all_preds, average='binary', pos_label=1)
     recall = recall_score(all_labels, all_preds, average='binary', pos_label=1)
     f1 = f1_score(all_labels, all_preds, average='binary', pos_label=1)
 
+    print("\n" + "="*30)
     print("FINAL TEST RESULTS")
+    print("="*30)
     print(f"Accuracy:  {accuracy:.4f}")
     print(f"Precision: {precision:.4f}")
     print(f"Recall:    {recall:.4f}")
     print(f"F1-Score:  {f1:.4f}")
+    print("="*30)
 
-    # 6. Report & Confusion Matrix
+    # 7. Classification Report
+    print("\nDetailed Classification Report:")
     report = classification_report(all_labels, all_preds, target_names=["No Wildfire", "Wildfire"])
     print(report)
 
+    # 8. Confusion Matrix
     cm = confusion_matrix(all_labels, all_preds)
     plt.figure(figsize=(8, 6))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Reds', 
@@ -88,8 +109,9 @@ def main(cfg: DictConfig):
     plt.xlabel('Predicted Label')
     
     plt.savefig("confusion_matrix.png")
+    print("Confusion matrix saved to confusion_matrix.png")
     
-    # 7. Log to WandB
+    # 9. Logging to WandB
     wandb.log({
         "test_accuracy": accuracy,
         "test_precision": precision,
