@@ -2,6 +2,32 @@ import os
 import torch
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, ConcatDataset
+from torchvision.datasets import ImageFolder
+
+class EnforcedMapDataset(ImageFolder):
+    """
+    An ImageFolder that forces a specific class-to-index mapping.
+    This allows loading a dataset where some classes might be empty (e.g., nowildfire)
+    without shifting the indices of the existing classes (wildfire).
+    """
+    def __init__(self, root, transform=None, forced_class_to_idx=None):
+        # We save the map BEFORE calling super().__init__
+        self.forced_class_to_idx = forced_class_to_idx
+        super().__init__(root, transform=transform)
+
+    def find_classes(self, directory):
+        """
+        Override the default auto-detection.
+        Instead of scanning the disk for folder names, we return the forced map.
+        """
+        if self.forced_class_to_idx is None:
+            return super().find_classes(directory)
+        
+        # Reconstruct the classes list from the dict keys
+        classes = list(self.forced_class_to_idx.keys())
+        return classes, self.forced_class_to_idx
+
+
 
 def get_dataloaders(cfg):
     # Define Transforms (Standard ImageNet stats)
