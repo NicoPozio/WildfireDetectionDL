@@ -1,8 +1,15 @@
-# Paths relative to the project root
-real_train_path: "/content/data/dataset/train"
-synthetic_train_path: "/content/data/synthetic_dataset" # Points to folder containing 'wildfire' subfolder
-val_path: "/content/data/dataset/valid"
-test_path: "/content/data/dataset/test"
+paths:
+  train: "/content/data/dataset/train"
+  # Points to the PARENT folder containing 'wildfire' and 'nowildfire'
+  synthetic: "/content/data/synthetic_dataset" 
+  val: "/content/data/dataset/valid"
+  test: "/content/data/dataset/test"
 
-use_synthetic: false
-input_size: [224, 224] 
+params:
+  input_size: [224, 224]
+  num_workers: 2
+  use_synthetic: false  # Default to false, toggle via command line
+  
+  # ImageNet Statistics (Standard for ResNet)
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
