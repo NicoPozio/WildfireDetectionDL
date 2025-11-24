@@ -32,7 +32,8 @@ class EnforcedMapDataset(ImageFolder):
 def get_dataloaders(cfg):
     # Using specific stats for ResNet is crucial for convergence
     transform = transforms.Compose([
-        transforms.Resize(tuple(cfg.dataset.input_size)),
+        transforms.Resize(256), 
+        transforms.CenterCrop(224),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         #the normalize value are good for the resnet but they are not good for the customized CNN, we need to compute them
