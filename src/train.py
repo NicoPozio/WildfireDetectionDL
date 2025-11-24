@@ -5,10 +5,10 @@ import torch.nn as nn
 import torch.optim as optim
 import wandb
 import os
-import shutil # Added for file copying
+import shutil
 from tqdm import tqdm
 from models import WildfireResNet, SimpleCNN
-from dataset import get_dataloaders
+from src.dataset import get_dataloaders
 from utils import seed_everything
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
@@ -27,26 +27,53 @@ def main(cfg: DictConfig):
     print(f"Training on {device} using model: {cfg.model.name}")
 
     # 2. Data
-    train_loader, val_loader, _ = get_dataloaders(cfg) # We ignore test_loader here
+    # Note: test_loader is unused in training, but get_dataloaders returns 3 items
+    train_loader, val_loader, _ = get_dataloaders(cfg) 
     if not train_loader: return
 
-    # 3. Model
+    # 3. Model Architecture
     if cfg.model.name == "resnet50":
-        model = WildfireResNet(cfg.model.num_classes, cfg.model.pretrained, cfg.model.dropout).to(device)
+        model = WildfireResNet(
+            num_classes=cfg.model.num_classes, 
+            pretrained=cfg.model.pretrained, 
+            dropout=cfg.model.dropout
+        ).to(device)
     elif cfg.model.name == "simple_cnn":
-        model = SimpleCNN(cfg.model.num_classes, cfg.model.dropout).to(device)
+        model = SimpleCNN(
+            num_classes=cfg.model.num_classes, 
+            dropout=cfg.model.dropout
+        ).to(device)
     else:
         raise ValueError(f"Unknown model: {cfg.model.name}")
 
-    optimizer = optim.Adam(model.parameters(), lr=cfg.training.learning_rate)
+    # 4. Optimizer Selection (Dynamic)
+    # We support switching between Adam and SGD via config/sweep
+    if cfg.training.optimizer == "adam":
+        optimizer = optim.Adam(
+            model.parameters(), 
+            lr=cfg.training.learning_rate,
+            weight_decay=cfg.training.weight_decay
+        )
+    elif cfg.training.optimizer == "sgd":
+        optimizer = optim.SGD(
+            model.parameters(), 
+            lr=cfg.training.learning_rate, 
+            momentum=0.9, 
+            weight_decay=cfg.training.weight_decay
+        )
+    else:
+        raise ValueError(f"Unknown optimizer type: {cfg.training.optimizer}")
+
     criterion = nn.CrossEntropyLoss()
 
-    # 4. Variables for Tracking
+    # 5. Tracking Variables
     best_val_acc = 0.0
     patience = cfg.training.early_stopping_patience
-    trigger_times = 0 # Counter for early stopping
+    trigger_times = 0 
+    filename = "best_model.pth"
 
-    # 5. Training Loop
+    # 6. Training Loop
+    print("Starting Training Loop...")
     for epoch in range(cfg.training.epochs):
         # --- TRAIN ---
         model.train()
@@ -78,7 +105,7 @@ def main(cfg: DictConfig):
                 val_total += labels.size(0)
                 val_correct += predicted.eq(labels).sum().item()
 
-        # --- METRICS ---
+        # --- METRICS & LOGGING ---
         metrics = {
             "train_loss": train_loss / len(train_loader),
             "train_acc": 100. * correct / total,
@@ -90,35 +117,30 @@ def main(cfg: DictConfig):
         wandb.log(metrics)
         print(f"   Train Acc: {metrics['train_acc']:.2f}% | Val Acc: {metrics['val_acc']:.2f}%")
 
-        # --- SAVE & EARLY STOPPING ---
-        # We use a fixed name so test.py can find it easily
-        filename = "best_model.pth" 
-        
+        # --- EARLY STOPPING & SAVING ---
         if metrics['val_acc'] > best_val_acc:
-            print(f"Validation Accuracy improved ({best_val_acc:.2f}% -> {metrics['val_acc']:.2f}%). Saving model...")
+            print(f"   Validation Accuracy improved ({best_val_acc:.2f}% -> {metrics['val_acc']:.2f}%). Saving model...")
             best_val_acc = metrics['val_acc']
-            trigger_times = 0 # Reset early stopping counter
+            trigger_times = 0 
             
-            # Save locally (inside Hydra folder)
+            # Save inside the Hydra output folder (current working directory)
             torch.save(model.state_dict(), filename)
-            
-            # Update WandB
             wandb.save(filename)
             
-            # CRITICAL: Save a copy to the Original Working Directory (Colab Root)
-            # This ensures test.py can find it even if it runs in a different Hydra folder
+            # Save a copy to the Original Working Directory so test.py can always find it
             orig_cwd = hydra.utils.get_original_cwd()
             shutil.copyfile(filename, os.path.join(orig_cwd, filename))
             
         else:
             trigger_times += 1
-            print(f"No improvement. Early Stopping Patience: {trigger_times}/{patience}")
+            print(f"   No improvement. Early Stopping Patience: {trigger_times}/{patience}")
             
             if trigger_times >= patience:
-                print("Early Stopping Triggered. Training stopped.")
+                print("   Early Stopping Triggered. Training stopped.")
                 break
 
     print("Training Complete.")
+    wandb.finish()
 
 if __name__ == "__main__":
     main()
