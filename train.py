@@ -9,7 +9,7 @@ import shutil
 from tqdm import tqdm
 from src.models import WildfireResNet, SimpleCNN
 from src.dataset import get_dataloaders
-from utils import seed_everything
+from src.utils import seed_everything
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
