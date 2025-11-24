@@ -9,13 +9,14 @@ hydra:
 
 training:
   epochs: 20
-  batch_size: 32
   learning_rate: 0.001
+  batch_size: 32 
   device: "cuda"
   seed: 42
   early_stopping_patience: 5
+  save_dir: "checkpoints" 
 
 wandb:
   project: "wildfire-detection"
-  entity: null  # Set your username if needed
+  entity: null  # Defaults to user who executes the project
   mode: "online"
