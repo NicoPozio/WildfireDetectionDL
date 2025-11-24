@@ -8,7 +8,7 @@ import os
 import shutil
 from tqdm import tqdm
 from models import WildfireResNet, SimpleCNN
-from src.dataset import get_dataloaders
+from dataset import get_dataloaders
 from utils import seed_everything
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
