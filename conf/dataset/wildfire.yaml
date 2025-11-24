@@ -1,8 +1,8 @@
 # Paths relative to the project root
-real_train_path: "content/data/dataset/train"
-synthetic_train_path: "content/data/synthetic_dataset" # Points to folder containing 'wildfire' subfolder
-val_path: "content/data/dataset/valid"
-test_path: "content/data/dataset/test"
+real_train_path: "/content/data/dataset/train"
+synthetic_train_path: "/content/data/synthetic_dataset" # Points to folder containing 'wildfire' subfolder
+val_path: "/content/data/dataset/valid"
+test_path: "/content/data/dataset/test"
 
 use_synthetic: false
 input_size: [224, 224] 
