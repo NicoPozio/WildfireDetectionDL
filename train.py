@@ -1,4 +1,4 @@
-%%writefile /content/WildfireDetectionDL/train.py
+
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import torch
