@@ -1,3 +1,4 @@
+%%writefile /content/WildfireDetectionDL/train.py
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import torch
@@ -10,6 +11,10 @@ from tqdm import tqdm
 from src.models import WildfireResNet, SimpleCNN
 from src.dataset import get_dataloaders
 from src.utils import seed_everything
+
+# FIX 1: Handle Corrupt Images
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
@@ -27,7 +32,6 @@ def main(cfg: DictConfig):
     print(f"Training on {device} using model: {cfg.model.name}")
 
     # 2. Data
-    # Note: test_loader is unused in training, but get_dataloaders returns 3 items
     train_loader, val_loader, _ = get_dataloaders(cfg) 
     if not train_loader: return
 
@@ -46,8 +50,7 @@ def main(cfg: DictConfig):
     else:
         raise ValueError(f"Unknown model: {cfg.model.name}")
 
-    # 4. Optimizer Selection (Dynamic)
-    # We support switching between Adam and SGD via config/sweep
+    # 4. Optimizer Selection
     if cfg.training.optimizer == "adam":
         optimizer = optim.Adam(
             model.parameters(), 
@@ -105,7 +108,7 @@ def main(cfg: DictConfig):
                 val_total += labels.size(0)
                 val_correct += predicted.eq(labels).sum().item()
 
-        # --- METRICS & LOGGING ---
+        # --- METRICS ---
         metrics = {
             "train_loss": train_loss / len(train_loader),
             "train_acc": 100. * correct / total,
@@ -123,13 +126,21 @@ def main(cfg: DictConfig):
             best_val_acc = metrics['val_acc']
             trigger_times = 0 
             
-            # Save inside the Hydra output folder (current working directory)
+            # Save locally (Current Working Directory)
             torch.save(model.state_dict(), filename)
             wandb.save(filename)
             
-            # Save a copy to the Original Working Directory so test.py can always find it
-            orig_cwd = hydra.utils.get_original_cwd()
-            shutil.copyfile(filename, os.path.join(orig_cwd, filename))
+            # FIX 2: Check before copying to avoid SameFileError
+            # We want to ensure the file exists in the Original Directory for test.py
+            try:
+                orig_cwd = hydra.utils.get_original_cwd()
+                source_path = os.path.abspath(filename)
+                dest_path = os.path.abspath(os.path.join(orig_cwd, filename))
+
+                if source_path != dest_path:
+                    shutil.copyfile(filename, dest_path)
+            except Exception as e:
+                print(f"   Warning: Could not copy to original CWD (Minor issue): {e}")
             
         else:
             trigger_times += 1
