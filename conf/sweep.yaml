@@ -1,4 +1,4 @@
-program: train.py
+program: src/train.py
 method: bayes
 metric:
   name: val_acc
