@@ -3,6 +3,7 @@ import torch
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, ConcatDataset
 from torchvision.datasets import ImageFolder
+from typing import Tuple, Optional
 
 class EnforcedMapDataset(ImageFolder):
     """
@@ -28,34 +29,58 @@ class EnforcedMapDataset(ImageFolder):
         return classes, self.forced_class_to_idx
 
 
-
 def get_dataloaders(cfg):
-    # Define Transforms (Standard ImageNet stats)
+    # Using specific stats for ResNet is crucial for convergence
     transform = transforms.Compose([
         transforms.Resize(tuple(cfg.dataset.input_size)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        #the normalize value are good for the resnet but they are not good for the customized CNN, we need to compute them
     ])
 
-    # Load Real Data
     try:
         real_train_ds = datasets.ImageFolder(cfg.dataset.real_train_path, transform=transform)
         val_ds = datasets.ImageFolder(cfg.dataset.val_path, transform=transform)
         test_ds = datasets.ImageFolder(cfg.dataset.test_path, transform=transform)
+        
+        #Capture the mapping ({'nowildfire': 0, 'wildfire': 1})
+        master_mapping = real_train_ds.class_to_idx
+        print(f"Real Data Loaded. Class Mapping: {master_mapping}")
+        
     except FileNotFoundError as e:
-        print(f" Error loading data: {e}")
-        return None, None
+        print(f"CRITICAL ERROR: Could not load real data: {e}")
+        return None, None, None # Return 3 Nones (Train, Val, Test)
 
-    # Augmentation Logic
+    #Synthetic data
     if cfg.dataset.use_synthetic:
-        print(f" AUGMENTATION ON: Mixing Real data with Synthetic data from {cfg.dataset.synthetic_train_path}")
+        print(f"AUGMENTATION ON: Injecting synthetic data from {cfg.dataset.synthetic_train_path}")
+        
         if os.path.exists(cfg.dataset.synthetic_train_path):
-            # Synthetic folder might not have class subfolders. 
-            # If it's just images, we might need a custom wrapper or assume 'wildfire' structure.
-            # Assuming standard ImageFolder structure: root/class/image.jpg
-            synthetic_ds = datasets.ImageFolder(cfg.dataset.synthetic_train_path, transform=transform)
-            train_ds = ConcatDataset([real_train_ds, synthetic_ds])
-            print(f"   -> Added {len(synthetic_ds)} synthetic images.")
+            try:
+                # We use the custom class and pass the 'master_mapping'
+                synthetic_ds = EnforcedMapDataset(
+                    root=cfg.dataset.synthetic_train_path,
+                    transform=transform,
+                    forced_class_to_idx=master_mapping 
+                )
+                
+                # Merge the datasets
+                train_ds = ConcatDataset([real_train_ds, synthetic_ds])
+                
+                print(f"   -> Added {len(synthetic_ds)} synthetic images.")
+                print(f"   -> Combined Training Set: {len(train_ds)} images.")
+                
+                # Sanity Check: Ensure synthetic_ds actually respects the label 1
+                if len(synthetic_ds) > 0:
+                     # Check the label of the first item
+                    _, label = synthetic_ds[0]
+                    expected_label = master_mapping['wildfire'] # Should be 1
+                    if label != expected_label:
+                        print(f"WARNING: Label mismatch! Synthetic label is {label}, expected {expected_label}")
+
+            except Exception as e:
+                print(f"WARNING: Failed to load synthetic data ({e}). Fallback to Real Only.")
+                train_ds = real_train_ds
         else:
             print(f"WARNING: Synthetic path not found. Using only Real data.")
             train_ds = real_train_ds
@@ -63,9 +88,12 @@ def get_dataloaders(cfg):
         print("BASELINE MODE: Using only Real data.")
         train_ds = real_train_ds
 
-    # Dataloaders (numworkers should be defined in conf)
-    train_loader = DataLoader(train_ds, batch_size=cfg.training.batch_size, shuffle=True, num_workers=2)
-    val_loader = DataLoader(val_ds, batch_size=cfg.training.batch_size, shuffle=False, num_workers=2)
-    test_loader = DataLoader(test_ds, batch_size=cfg.training.batch_size, shuffle=False, num_workers=2)
+    # Create DataLoaders
+    # Note: num_workers should ideally come from cfg, but hardcoded 2 is safe for Colab
+    batch_size = cfg.training.batch_size
+    
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
+    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
 
-    return train_loader, val_loader
+    return train_loader, val_loader, test_loader
