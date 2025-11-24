@@ -57,7 +57,7 @@ def get_dataloaders(cfg):
     # 1. Transforms
     train_transform = transforms.Compose([
         transforms.Resize(256),
-        transforms.CenterCrop(224)
+        transforms.CenterCrop(224),
         transforms.RandomRotation(degrees=cfg.dataset.augmentation.rotation_degrees),
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.ToTensor(),
