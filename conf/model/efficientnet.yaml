@@ -1,0 +1,4 @@
+name: efficientnet
+num_classes: 2
+pretrained: true
+dropout: 0.2
