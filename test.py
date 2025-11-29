@@ -3,7 +3,7 @@ from omegaconf import DictConfig, OmegaConf
 import torch
 import wandb
 import os
-from src.models import WildfireResNet, SimpleCNN
+from src.models import WildfireResNet, SimpleCNN, WildfireEfficientNet
 from src.dataset import get_dataloaders
 from sklearn.metrics import classification_report, confusion_matrix, precision_score, recall_score, f1_score, accuracy_score
 import seaborn as sns
@@ -36,6 +36,12 @@ def main(cfg: DictConfig):
     elif cfg.model.name == "simple_cnn":
         model = SimpleCNN(
             num_classes=cfg.model.num_classes, 
+            dropout=cfg.model.dropout
+        )
+    elif cfg.model.name == "efficientnet":
+        model = WildfireEfficientNet(
+            num_classes=cfg.model.num_classes, 
+            pretrained=cfg.model.pretrained, 
             dropout=cfg.model.dropout
         )
     else:
