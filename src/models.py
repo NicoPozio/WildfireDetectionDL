@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
+from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights   #aggiunto per fare confronto tra risultati ResNet ed EfficientNet
 
 class WildfireResNet(nn.Module):
     def __init__(self, num_classes=2, pretrained=True, dropout=0.5):
@@ -43,3 +44,22 @@ class SimpleCNN(nn.Module):
     def forward(self, x):
         x = self.features(x)
         return self.classifier(x)
+
+#Added a new class for EfficientNet
+class WildfireEfficientNet(nn.Module):
+    def __init__(self, num_classes=2, pretrained=True, dropout=0.2):
+        super().__init__()
+        # Load Pretrained EfficientNet B0
+        weights = EfficientNet_B0_Weights.DEFAULT if pretrained else None
+        self.backbone = efficientnet_b0(weights=weights)
+        
+        #Get the input features of the final linear layer 
+        in_features = self.backbone.classifier[1].in_features
+        
+        self.backbone.classifier = nn.Sequential(
+            nn.Dropout(p=dropout),
+            nn.Linear(in_features, num_classes)
+        )
+        
+    def forward(self, x):
+        return self.backbone(x)
