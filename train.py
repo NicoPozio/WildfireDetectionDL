@@ -1,4 +1,3 @@
-
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import torch
@@ -11,31 +10,24 @@ from tqdm import tqdm
 from src.models import WildfireResNet, SimpleCNN, WildfireEfficientNet
 from src.dataset import get_dataloaders
 from src.utils import seed_everything
-
-# FIX 1: Handle Corrupt Images
 from PIL import ImageFile
+
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
     seed_everything(cfg.training.seed)
     
-    # 1. WandB Setup
     wandb_config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
-    wandb.init(
-        project=cfg.wandb.project, 
-        config=wandb_config, 
-        mode=cfg.wandb.mode
-    )
+    wandb.init(project=cfg.wandb.project, config=wandb_config, mode=cfg.wandb.mode)
     
     device = torch.device(cfg.training.device if torch.cuda.is_available() else "cpu")
     print(f"Training on {device} using model: {cfg.model.name}")
 
-    # 2. Data
     train_loader, val_loader, _ = get_dataloaders(cfg) 
     if not train_loader: return
 
-    # 3. Model Architecture
+    # Model Factory
     if cfg.model.name == "resnet50":
         model = WildfireResNet(
             num_classes=cfg.model.num_classes, 
@@ -47,20 +39,20 @@ def main(cfg: DictConfig):
             num_classes=cfg.model.num_classes, 
             dropout=cfg.model.dropout
         ).to(device)
-    elif cfg.model.name == "efficientnet":   
+    elif cfg.model.name == "efficientnet":
         model = WildfireEfficientNet(
-            num_classes=cfg.model.num_classes, 
-            pretrained=cfg.model.pretrained, 
+            num_classes=cfg.model.num_classes,
+            pretrained=cfg.model.pretrained,
             dropout=cfg.model.dropout
         ).to(device)
     else:
         raise ValueError(f"Unknown model: {cfg.model.name}")
 
-    # 4. Optimizer Selection
+    # Optimizer Factory
     if cfg.training.optimizer == "adam":
         optimizer = optim.Adam(
             model.parameters(), 
-            lr=cfg.training.learning_rate,
+            lr=cfg.training.learning_rate, 
             weight_decay=cfg.training.weight_decay
         )
     elif cfg.training.optimizer == "sgd":
@@ -75,20 +67,19 @@ def main(cfg: DictConfig):
 
     criterion = nn.CrossEntropyLoss()
 
-    # 5. Tracking Variables
     best_val_acc = 0.0
     patience = cfg.training.early_stopping_patience
     trigger_times = 0 
     filename = "best_model.pth"
 
-    # 6. Training Loop
     print("Starting Training Loop...")
     for epoch in range(cfg.training.epochs):
-        # --- TRAIN ---
+        # Train
         model.train()
         train_loss, correct, total = 0, 0, 0
         
-        for images, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{cfg.training.epochs}"):
+        # Reduced logging frequency for cleaner output
+        for images, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{cfg.training.epochs}", mininterval=10.0):
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
             outputs = model(images)
@@ -101,7 +92,7 @@ def main(cfg: DictConfig):
             total += labels.size(0)
             correct += predicted.eq(labels).sum().item()
 
-        # --- VALIDATE ---
+        # Validate
         model.eval()
         val_loss, val_correct, val_total = 0, 0, 0
         with torch.no_grad():
@@ -114,7 +105,7 @@ def main(cfg: DictConfig):
                 val_total += labels.size(0)
                 val_correct += predicted.eq(labels).sum().item()
 
-        # --- METRICS ---
+        # Metrics
         metrics = {
             "train_loss": train_loss / len(train_loader),
             "train_acc": 100. * correct / total,
@@ -124,39 +115,44 @@ def main(cfg: DictConfig):
         }
         
         wandb.log(metrics)
-        print(f"   Train Acc: {metrics['train_acc']:.2f}% | Val Acc: {metrics['val_acc']:.2f}%")
+        print(f"   Train Loss: {metrics['train_loss']:.4f} | Train Acc: {metrics['train_acc']:.2f}%")
+        print(f"   Val Loss:   {metrics['val_loss']:.4f} | Val Acc:   {metrics['val_acc']:.2f}%")
 
-        # --- EARLY STOPPING & SAVING ---
+        # Early Stopping & Saving
         if metrics['val_acc'] > best_val_acc:
             print(f"   Validation Accuracy improved ({best_val_acc:.2f}% -> {metrics['val_acc']:.2f}%). Saving model...")
             best_val_acc = metrics['val_acc']
             trigger_times = 0 
             
-            # Save locally (Current Working Directory)
             torch.save(model.state_dict(), filename)
             wandb.save(filename)
             
-            # FIX 2: Check before copying to avoid SameFileError
-            # We want to ensure the file exists in the Original Directory for test.py
+            # Idempotent local copy for test script
             try:
                 orig_cwd = hydra.utils.get_original_cwd()
-                source_path = os.path.abspath(filename)
-                dest_path = os.path.abspath(os.path.join(orig_cwd, filename))
-
-                if source_path != dest_path:
+                dest_path = os.path.join(orig_cwd, filename)
+                if os.path.abspath(filename) != os.path.abspath(dest_path):
                     shutil.copyfile(filename, dest_path)
-            except Exception as e:
-                print(f"   Warning: Could not copy to original CWD (Minor issue): {e}")
-            
+            except Exception:
+                pass
+                
+            # Drive Backup
+            try:
+                drive_root = "/content/drive/MyDrive/Wildfire_Project/saved_models"
+                run_name = f"{cfg.model.name}_{wandb.run.id}"
+                drive_run_dir = os.path.join(drive_root, run_name)
+                os.makedirs(drive_run_dir, exist_ok=True)
+                shutil.copyfile(filename, os.path.join(drive_run_dir, "best_weights.pth"))
+                OmegaConf.save(cfg, os.path.join(drive_run_dir, "config.yaml"))
+            except Exception:
+                pass
+                
         else:
             trigger_times += 1
-            print(f"   No improvement. Early Stopping Patience: {trigger_times}/{patience}")
-            
             if trigger_times >= patience:
-                print("   Early Stopping Triggered. Training stopped.")
+                print("   Early Stopping Triggered.")
                 break
 
-    print("Training Complete.")
     wandb.finish()
 
 if __name__ == "__main__":
