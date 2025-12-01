@@ -30,3 +30,4 @@ wandb:
   project: "wildfire-detection"
   entity: null # Defaults to your username
   mode: "online"
+  name: null 
