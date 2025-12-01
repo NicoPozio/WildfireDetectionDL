@@ -8,6 +8,7 @@ paths:
 params:
   input_size: [224, 224]
   num_workers: 2
+  real_data_fraction: 1.0
   use_synthetic: false  # Default to false, toggle via command line
   
   # ImageNet Statistics (Standard for ResNet)
