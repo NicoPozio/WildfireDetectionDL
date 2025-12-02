@@ -48,51 +48,37 @@ def main(cfg: DictConfig):
     else:
         raise ValueError(f"Unknown model: {cfg.model.name}")
 
-    # Optimizer Factory
     if cfg.training.optimizer == "adam":
-        optimizer = optim.Adam(
-            model.parameters(), 
-            lr=cfg.training.learning_rate, 
-            weight_decay=cfg.training.weight_decay
-        )
+        optimizer = optim.Adam(model.parameters(), lr=cfg.training.learning_rate, weight_decay=cfg.training.weight_decay)
     elif cfg.training.optimizer == "sgd":
-        optimizer = optim.SGD(
-            model.parameters(), 
-            lr=cfg.training.learning_rate, 
-            momentum=0.9, 
-            weight_decay=cfg.training.weight_decay
-        )
-    else:
-        raise ValueError(f"Unknown optimizer type: {cfg.training.optimizer}")
-
+        optimizer = optim.SGD(model.parameters(), lr=cfg.training.learning_rate, momentum=0.9, weight_decay=cfg.training.weight_decay)
+    
     criterion = nn.CrossEntropyLoss()
 
     best_val_acc = 0.0
     patience = cfg.training.early_stopping_patience
     trigger_times = 0 
-    filename = "best_model.pth"
+    
+    # UNIQUE FILENAME LOGIC
+    unique_filename = f"model_{wandb.run.id}.pth"
 
     print("Starting Training Loop...")
     for epoch in range(cfg.training.epochs):
-        # Train
         model.train()
         train_loss, correct, total = 0, 0, 0
         
-        # Reduced logging frequency for cleaner output
-        for images, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{cfg.training.epochs}", mininterval=10.0):
+        for images, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}", mininterval=10.0):
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
             outputs = model(images)
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
-            
             train_loss += loss.item()
             _, predicted = outputs.max(1)
             total += labels.size(0)
             correct += predicted.eq(labels).sum().item()
 
-        # Validate
         model.eval()
         val_loss, val_correct, val_total = 0, 0, 0
         with torch.no_grad():
@@ -105,7 +91,6 @@ def main(cfg: DictConfig):
                 val_total += labels.size(0)
                 val_correct += predicted.eq(labels).sum().item()
 
-        # Metrics
         metrics = {
             "train_loss": train_loss / len(train_loader),
             "train_acc": 100. * correct / total,
@@ -118,34 +103,28 @@ def main(cfg: DictConfig):
         print(f"   Train Loss: {metrics['train_loss']:.4f} | Train Acc: {metrics['train_acc']:.2f}%")
         print(f"   Val Loss:   {metrics['val_loss']:.4f} | Val Acc:   {metrics['val_acc']:.2f}%")
 
-        # Early Stopping & Saving
         if metrics['val_acc'] > best_val_acc:
             print(f"   Validation Accuracy improved ({best_val_acc:.2f}% -> {metrics['val_acc']:.2f}%). Saving model...")
             best_val_acc = metrics['val_acc']
             trigger_times = 0 
             
-            torch.save(model.state_dict(), filename)
-            wandb.save(filename)
+            # Save Locally
+            torch.save(model.state_dict(), unique_filename)
             
-            # Idempotent local copy for test script
-            try:
-                orig_cwd = hydra.utils.get_original_cwd()
-                dest_path = os.path.join(orig_cwd, filename)
-                if os.path.abspath(filename) != os.path.abspath(dest_path):
-                    shutil.copyfile(filename, dest_path)
-            except Exception:
-                pass
-                
-            # Drive Backup
+            # Upload to WandB
+            wandb.save(unique_filename)
+            
+            # Save to Drive (Unique Folder)
             try:
                 drive_root = "/content/drive/MyDrive/Wildfire_Project/saved_models"
-                run_name = f"{cfg.model.name}_{wandb.run.id}"
-                drive_run_dir = os.path.join(drive_root, run_name)
+                drive_run_dir = os.path.join(drive_root, f"{cfg.model.name}_{wandb.run.id}")
                 os.makedirs(drive_run_dir, exist_ok=True)
-                shutil.copyfile(filename, os.path.join(drive_run_dir, "best_weights.pth"))
+                
+                # Copy with standard name 'best_weights.pth' inside the unique folder
+                shutil.copyfile(unique_filename, os.path.join(drive_run_dir, "best_weights.pth"))
                 OmegaConf.save(cfg, os.path.join(drive_run_dir, "config.yaml"))
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Drive backup failed: {e}")
                 
         else:
             trigger_times += 1
