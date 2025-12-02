@@ -1,7 +1,6 @@
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import torch
-import wandb
 import os
 from src.models import WildfireResNet, SimpleCNN, WildfireEfficientNet
 from src.dataset import get_dataloaders
@@ -12,23 +11,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 def fix_key(key):
-    # Standardize prefixes to match the current model definition
     if key.startswith("backbone."):
         return key.replace("backbone.", "base_model.")
+    if key.startswith("module."):
+        return key.replace("module.", "")
     return key
 
 def load_state_dict_robust(model, path, device):
     state_dict = torch.load(path, map_location=device)
     new_state_dict = {}
     
-    keys = list(state_dict.keys())
-    is_file_simple = any("features.0" in k for k in keys)
-    is_model_resnet = isinstance(model, WildfireResNet)
-    
-    # Safety check to prevent loading wrong architecture
-    if is_file_simple and is_model_resnet:
-        raise RuntimeError("Architecture Mismatch: File contains SimpleCNN weights, but Model is ResNet.")
-
     for k, v in state_dict.items():
         new_state_dict[fix_key(k)] = v
         
@@ -43,9 +35,6 @@ def main(cfg: DictConfig):
     seed_everything(cfg.training.seed)
     device = torch.device(cfg.training.device if torch.cuda.is_available() else "cpu")
     
-    wandb_config = OmegaConf.to_container(cfg, resolve=True)
-    wandb.init(project=cfg.wandb.project, config=wandb_config, job_type="test", name="final_evaluation")
-
     print(f"Initializing Model: {cfg.model.name}")
     _, _, test_loader = get_dataloaders(cfg)
     
@@ -58,16 +47,14 @@ def main(cfg: DictConfig):
     else:
         raise ValueError(f"Unknown model: {cfg.model.name}")
 
-    # Allow overriding filename via command line, default to best_model.pth
     load_path = cfg.get("model_path", "best_model.pth")
     
     if not os.path.exists(load_path):
-        # Fallback check in original Hydra working directory
         try:
             load_path = os.path.join(hydra.utils.get_original_cwd(), "best_model.pth")
         except:
             pass
-            
+
     if not os.path.exists(load_path):
         raise FileNotFoundError(f"CRITICAL ERROR: Weight file not found at: {load_path}")
 
@@ -107,25 +94,16 @@ def main(cfg: DictConfig):
     print(report)
 
     cm = confusion_matrix(all_labels, all_preds)
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Reds', 
+    plt.figure(figsize=(6, 5))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
                 xticklabels=["Pred: No Fire", "Pred: Fire"], 
                 yticklabels=["Actual: No Fire", "Actual: Fire"])
-    plt.title('Test Set Confusion Matrix')
+    plt.title(f'Confusion Matrix: {cfg.model.name}')
     plt.ylabel('True Label')
     plt.xlabel('Predicted Label')
+    plt.tight_layout()
     plt.savefig("confusion_matrix.png")
     print("Confusion Matrix saved to confusion_matrix.png")
-    
-    wandb.log({
-        "test_accuracy": accuracy,
-        "test_precision": precision,
-        "test_recall": recall,
-        "test_f1": f1,
-        "confusion_matrix": wandb.Image("confusion_matrix.png"),
-    })
-    
-    wandb.finish()
 
 if __name__ == "__main__":
     main()
