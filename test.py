@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 def fix_key(key):
+    # Standardize prefixes to match the current model definition
     if key.startswith("backbone."):
         return key.replace("backbone.", "base_model.")
     return key
@@ -24,6 +25,7 @@ def load_state_dict_robust(model, path, device):
     is_file_simple = any("features.0" in k for k in keys)
     is_model_resnet = isinstance(model, WildfireResNet)
     
+    # Safety check to prevent loading wrong architecture
     if is_file_simple and is_model_resnet:
         raise RuntimeError("Architecture Mismatch: File contains SimpleCNN weights, but Model is ResNet.")
 
@@ -33,7 +35,7 @@ def load_state_dict_robust(model, path, device):
     try:
         model.load_state_dict(new_state_dict, strict=True)
     except RuntimeError:
-        print("Warning: Strict loading failed. Retrying with strict=False to ignore prefix mismatches.")
+        print("Warning: Strict loading failed. Retrying with strict=False.")
         model.load_state_dict(new_state_dict, strict=False)
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
@@ -56,9 +58,11 @@ def main(cfg: DictConfig):
     else:
         raise ValueError(f"Unknown model: {cfg.model.name}")
 
+    # Allow overriding filename via command line, default to best_model.pth
     load_path = cfg.get("model_path", "best_model.pth")
     
     if not os.path.exists(load_path):
+        # Fallback check in original Hydra working directory
         try:
             load_path = os.path.join(hydra.utils.get_original_cwd(), "best_model.pth")
         except:
