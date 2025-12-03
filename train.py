@@ -29,11 +29,22 @@ def main(cfg: DictConfig):
 
     # Model Factory
     if cfg.model.name == "resnet50":
-        model = WildfireResNet(num_classes=2, pretrained=cfg.model.pretrained, dropout=cfg.model.dropout).to(device)
+        model = WildfireResNet(
+            num_classes=cfg.model.num_classes, 
+            pretrained=cfg.model.pretrained, 
+            dropout=cfg.model.dropout
+        ).to(device)
     elif cfg.model.name == "simple_cnn":
-        model = SimpleCNN(num_classes=2, dropout=cfg.model.dropout).to(device)
+        model = SimpleCNN(
+            num_classes=cfg.model.num_classes, 
+            dropout=cfg.model.dropout
+        ).to(device)
     elif cfg.model.name == "efficientnet":
-        model = WildfireEfficientNet(num_classes=2, pretrained=cfg.model.pretrained, dropout=cfg.model.dropout).to(device)
+        model = WildfireEfficientNet(
+            num_classes=cfg.model.num_classes,
+            pretrained=cfg.model.pretrained,
+            dropout=cfg.model.dropout
+        ).to(device)
     else:
         raise ValueError(f"Unknown model: {cfg.model.name}")
 
@@ -48,10 +59,9 @@ def main(cfg: DictConfig):
     patience = cfg.training.early_stopping_patience
     trigger_times = 0 
     
-    # UNIQUE LOCAL FILENAME (Crucial fix)
-    # Includes model name and synthetic flag to avoid collisions
-    syn_tag = "syn" if cfg.dataset.params.use_synthetic else "real"
-    unique_local_name = f"weights_{cfg.model.name}_{syn_tag}_{wandb.run.id}.pth"
+    # UNIQUE FILENAME LOGIC
+    # Prevents local collisions during sequential runs
+    unique_filename = f"model_{wandb.run.id}.pth"
 
     print("Starting Training Loop...")
     for epoch in range(cfg.training.epochs):
@@ -99,17 +109,21 @@ def main(cfg: DictConfig):
             best_val_acc = metrics['val_acc']
             trigger_times = 0 
             
-            # Save to unique local file
-            torch.save(model.state_dict(), unique_local_name)
+            # 1. Save Locally
+            torch.save(model.state_dict(), unique_filename)
             
-            # Backup to Drive
+            # 2. Upload to WandB (Renamed to standard 'best_model.pth' for API consistency)
+            shutil.copy(unique_filename, "best_model.pth")
+            wandb.save("best_model.pth")
+            
+            # 3. Backup to Drive (Unique Folder)
             try:
                 drive_root = "/content/drive/MyDrive/Wildfire_Project/saved_models"
                 run_folder = f"{cfg.model.name}_{wandb.run.id}"
                 drive_run_dir = os.path.join(drive_root, run_folder)
                 os.makedirs(drive_run_dir, exist_ok=True)
                 
-                shutil.copyfile(unique_local_name, os.path.join(drive_run_dir, "best_weights.pth"))
+                shutil.copyfile(unique_filename, os.path.join(drive_run_dir, "best_weights.pth"))
                 OmegaConf.save(cfg, os.path.join(drive_run_dir, "config.yaml"))
             except Exception as e:
                 print(f"Drive backup failed: {e}")
