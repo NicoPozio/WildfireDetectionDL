@@ -1,4 +1,3 @@
-%%writefile /content/WildfireDetectionDL/test.py
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import torch
