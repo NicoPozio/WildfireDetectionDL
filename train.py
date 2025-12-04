@@ -5,7 +5,6 @@ import torch.nn as nn
 import torch.optim as optim
 import wandb
 import os
-import shutil
 from tqdm import tqdm
 from src.models import WildfireResNet, SimpleCNN, WildfireEfficientNet
 from src.dataset import get_dataloaders
@@ -18,8 +17,16 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 def main(cfg: DictConfig):
     seed_everything(cfg.training.seed)
     
-    wandb_config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
-    wandb.init(project=cfg.wandb.project, config=wandb_config, mode=cfg.wandb.mode)
+    # Convert config to dictionary for metadata
+    config_dict = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
+    
+    # Initialize Run
+    run = wandb.init(
+        project=cfg.wandb.project, 
+        config=config_dict, 
+        mode=cfg.wandb.mode,
+        job_type="train"
+    )
     
     device = torch.device(cfg.training.device if torch.cuda.is_available() else "cpu")
     print(f"Training on {device} using model: {cfg.model.name}")
@@ -27,27 +34,17 @@ def main(cfg: DictConfig):
     train_loader, val_loader, _ = get_dataloaders(cfg) 
     if not train_loader: return
 
-    # Model Factory
+    # Initialize Model
     if cfg.model.name == "resnet50":
-        model = WildfireResNet(
-            num_classes=cfg.model.num_classes, 
-            pretrained=cfg.model.pretrained, 
-            dropout=cfg.model.dropout
-        ).to(device)
+        model = WildfireResNet(num_classes=2, pretrained=cfg.model.pretrained, dropout=cfg.model.dropout).to(device)
     elif cfg.model.name == "simple_cnn":
-        model = SimpleCNN(
-            num_classes=cfg.model.num_classes, 
-            dropout=cfg.model.dropout
-        ).to(device)
+        model = SimpleCNN(num_classes=2, dropout=cfg.model.dropout).to(device)
     elif cfg.model.name == "efficientnet":
-        model = WildfireEfficientNet(
-            num_classes=cfg.model.num_classes,
-            pretrained=cfg.model.pretrained,
-            dropout=cfg.model.dropout
-        ).to(device)
+        model = WildfireEfficientNet(num_classes=2, pretrained=cfg.model.pretrained, dropout=cfg.model.dropout).to(device)
     else:
         raise ValueError(f"Unknown model: {cfg.model.name}")
 
+    # Initialize Optimizer
     if cfg.training.optimizer == "adam":
         optimizer = optim.Adam(model.parameters(), lr=cfg.training.learning_rate, weight_decay=cfg.training.weight_decay)
     elif cfg.training.optimizer == "sgd":
@@ -59,9 +56,8 @@ def main(cfg: DictConfig):
     patience = cfg.training.early_stopping_patience
     trigger_times = 0 
     
-    # UNIQUE FILENAME LOGIC
-    # Prevents local collisions during sequential runs
-    unique_filename = f"model_{wandb.run.id}.pth"
+    # Temporary local filename (will be deleted after upload)
+    temp_model_name = "model.pth"
 
     print("Starting Training Loop...")
     for epoch in range(cfg.training.epochs):
@@ -101,32 +97,28 @@ def main(cfg: DictConfig):
         }
         
         wandb.log(metrics)
-        print(f"   Train Loss: {metrics['train_loss']:.4f} | Train Acc: {metrics['train_acc']:.2f}%")
-        print(f"   Val Loss:   {metrics['val_loss']:.4f} | Val Acc:   {metrics['val_acc']:.2f}%")
+        print(f"   Val Acc: {metrics['val_acc']:.2f}%")
 
         if metrics['val_acc'] > best_val_acc:
-            print(f"   Validation Accuracy improved ({best_val_acc:.2f}% -> {metrics['val_acc']:.2f}%). Saving model...")
+            print(f"   New Best Model ({metrics['val_acc']:.2f}%)! Saving Artifact...")
             best_val_acc = metrics['val_acc']
             trigger_times = 0 
             
-            # 1. Save Locally
-            torch.save(model.state_dict(), unique_filename)
+            # 1. Save weights locally
+            torch.save(model.state_dict(), temp_model_name)
             
-            # 2. Upload to WandB (Renamed to standard 'best_model.pth' for API consistency)
-            shutil.copy(unique_filename, "best_model.pth")
-            wandb.save("best_model.pth")
+            # 2. Create Artifact
+            # We name the artifact based on the architecture so they are grouped cleanly
+            artifact = wandb.Artifact(
+                name=f"model-{cfg.model.name}", 
+                type="model",
+                description=f"Accuracy: {best_val_acc:.2f}%",
+                metadata=config_dict # Critical: Embeds the config into the artifact
+            )
             
-            # 3. Backup to Drive (Unique Folder)
-            try:
-                drive_root = "/content/drive/MyDrive/Wildfire_Project/saved_models"
-                run_folder = f"{cfg.model.name}_{wandb.run.id}"
-                drive_run_dir = os.path.join(drive_root, run_folder)
-                os.makedirs(drive_run_dir, exist_ok=True)
-                
-                shutil.copyfile(unique_filename, os.path.join(drive_run_dir, "best_weights.pth"))
-                OmegaConf.save(cfg, os.path.join(drive_run_dir, "config.yaml"))
-            except Exception as e:
-                print(f"Drive backup failed: {e}")
+            # 3. Add file and Log
+            artifact.add_file(temp_model_name)
+            run.log_artifact(artifact)
                 
         else:
             trigger_times += 1
