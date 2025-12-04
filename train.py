@@ -15,20 +15,27 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
+    print("DEBUG: Starting main function...")
     seed_everything(cfg.training.seed)
     
-    # Save config as dict for Artifact Metadata
     config_dict = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
-    
+    print("DEBUG: Initializing WandB...")
     run = wandb.init(project=cfg.wandb.project, config=config_dict, mode=cfg.wandb.mode)
+    print("DEBUG: WandB Initialized.")
     
     device = torch.device(cfg.training.device if torch.cuda.is_available() else "cpu")
     print(f"Training on {device} using model: {cfg.model.name}")
 
+    print("DEBUG: Loading Data...")
     train_loader, val_loader, _ = get_dataloaders(cfg) 
-    if not train_loader: return
+    
+    if not train_loader:
+        print("DEBUG: Data Loader returned None/Empty!")
+        return
+    print(f"DEBUG: Data Loaded. Train batches: {len(train_loader)}")
 
     # Initialize Model
+    print("DEBUG: Initializing Model...")
     if cfg.model.name == "resnet50":
         model = WildfireResNet(num_classes=2, pretrained=cfg.model.pretrained, dropout=cfg.model.dropout).to(device)
     elif cfg.model.name == "simple_cnn":
@@ -48,19 +55,22 @@ def main(cfg: DictConfig):
     best_val_acc = 0.0
     patience = cfg.training.early_stopping_patience
     trigger_times = 0 
-    
-    # Local temp file
     temp_file = "model_weights.pth"
 
     print("Starting Training Loop...")
     for epoch in range(cfg.training.epochs):
+        print(f"DEBUG: Start Epoch {epoch+1}/{cfg.training.epochs}")
         model.train()
         train_loss, correct, total = 0, 0, 0
         
+        # Add print to confirm loop entry
+        batch_count = 0
         for images, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}", mininterval=10.0):
+            batch_count += 1
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
-            loss = criterion(outputs := model(images), labels)
+            outputs = model(images)
+            loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
@@ -68,9 +78,12 @@ def main(cfg: DictConfig):
             total += labels.size(0)
             correct += predicted.eq(labels).sum().item()
 
+        print(f"DEBUG: Epoch {epoch+1} Training Done. Processed {batch_count} batches.")
+
         model.eval()
         correct = 0
         total = 0
+        print("DEBUG: Starting Validation...")
         with torch.no_grad():
             for images, labels in val_loader:
                 images, labels = images.to(device), labels.to(device)
@@ -87,12 +100,7 @@ def main(cfg: DictConfig):
             best_val_acc = val_acc
             trigger_times = 0 
             
-            # 1. Save locally
             torch.save(model.state_dict(), temp_file)
-            
-            # 2. Log as Artifact
-            # We create a new artifact version for every improvement or just overwrite
-            # Here we create a new one to be safe
             artifact = wandb.Artifact(
                 name=f"model-{cfg.model.name}-{wandb.run.id}", 
                 type="model",
@@ -107,6 +115,7 @@ def main(cfg: DictConfig):
                 print("   Early Stopping.")
                 break
 
+    print("DEBUG: Finishing Run...")
     wandb.finish()
 
 if __name__ == "__main__":
