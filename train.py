@@ -17,16 +17,10 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 def main(cfg: DictConfig):
     seed_everything(cfg.training.seed)
     
-    # Convert config to dictionary for metadata
+    # Save config as dict for Artifact Metadata
     config_dict = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
     
-    # Initialize Run
-    run = wandb.init(
-        project=cfg.wandb.project, 
-        config=config_dict, 
-        mode=cfg.wandb.mode,
-        job_type="train"
-    )
+    run = wandb.init(project=cfg.wandb.project, config=config_dict, mode=cfg.wandb.mode)
     
     device = torch.device(cfg.training.device if torch.cuda.is_available() else "cpu")
     print(f"Training on {device} using model: {cfg.model.name}")
@@ -44,7 +38,6 @@ def main(cfg: DictConfig):
     else:
         raise ValueError(f"Unknown model: {cfg.model.name}")
 
-    # Initialize Optimizer
     if cfg.training.optimizer == "adam":
         optimizer = optim.Adam(model.parameters(), lr=cfg.training.learning_rate, weight_decay=cfg.training.weight_decay)
     elif cfg.training.optimizer == "sgd":
@@ -56,8 +49,8 @@ def main(cfg: DictConfig):
     patience = cfg.training.early_stopping_patience
     trigger_times = 0 
     
-    # Temporary local filename (will be deleted after upload)
-    temp_model_name = "model.pth"
+    # Local temp file
+    temp_file = "model_weights.pth"
 
     print("Starting Training Loop...")
     for epoch in range(cfg.training.epochs):
@@ -67,8 +60,7 @@ def main(cfg: DictConfig):
         for images, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}", mininterval=10.0):
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, labels)
+            loss = criterion(outputs := model(images), labels)
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
@@ -77,53 +69,42 @@ def main(cfg: DictConfig):
             correct += predicted.eq(labels).sum().item()
 
         model.eval()
-        val_loss, val_correct, val_total = 0, 0, 0
+        correct = 0
+        total = 0
         with torch.no_grad():
             for images, labels in val_loader:
                 images, labels = images.to(device), labels.to(device)
-                outputs = model(images)
-                loss = criterion(outputs, labels)
-                val_loss += loss.item()
-                _, predicted = outputs.max(1)
-                val_total += labels.size(0)
-                val_correct += predicted.eq(labels).sum().item()
+                _, predicted = model(images).max(1)
+                total += labels.size(0)
+                correct += predicted.eq(labels).sum().item()
 
-        metrics = {
-            "train_loss": train_loss / len(train_loader),
-            "train_acc": 100. * correct / total,
-            "val_loss": val_loss / len(val_loader),
-            "val_acc": 100. * val_correct / val_total,
-            "epoch": epoch + 1
-        }
-        
-        wandb.log(metrics)
-        print(f"   Val Acc: {metrics['val_acc']:.2f}%")
+        val_acc = 100. * correct / total
+        print(f"   Val Acc: {val_acc:.2f}%")
+        wandb.log({"val_acc": val_acc, "epoch": epoch+1})
 
-        if metrics['val_acc'] > best_val_acc:
-            print(f"   New Best Model ({metrics['val_acc']:.2f}%)! Saving Artifact...")
-            best_val_acc = metrics['val_acc']
+        if val_acc > best_val_acc:
+            print(f"   New Best! Saving Artifact...")
+            best_val_acc = val_acc
             trigger_times = 0 
             
-            # 1. Save weights locally
-            torch.save(model.state_dict(), temp_model_name)
+            # 1. Save locally
+            torch.save(model.state_dict(), temp_file)
             
-            # 2. Create Artifact
-            # We name the artifact based on the architecture so they are grouped cleanly
+            # 2. Log as Artifact
+            # We create a new artifact version for every improvement or just overwrite
+            # Here we create a new one to be safe
             artifact = wandb.Artifact(
-                name=f"model-{cfg.model.name}", 
+                name=f"model-{cfg.model.name}-{wandb.run.id}", 
                 type="model",
-                description=f"Accuracy: {best_val_acc:.2f}%",
-                metadata=config_dict # Critical: Embeds the config into the artifact
+                metadata=config_dict
             )
-            
-            # 3. Add file and Log
-            artifact.add_file(temp_model_name)
+            artifact.add_file(temp_file)
             run.log_artifact(artifact)
                 
         else:
             trigger_times += 1
             if trigger_times >= patience:
-                print("   Early Stopping Triggered.")
+                print("   Early Stopping.")
                 break
 
     wandb.finish()
