@@ -1,6 +1,7 @@
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import torch
+import wandb
 import os
 from src.models import WildfireResNet, SimpleCNN, WildfireEfficientNet
 from src.dataset import get_dataloaders
@@ -11,6 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 def fix_key(key):
+    # Standardize prefixes to match the current model definition
     if key.startswith("backbone."):
         return key.replace("backbone.", "base_model.")
     if key.startswith("module."):
@@ -18,26 +20,53 @@ def fix_key(key):
     return key
 
 def load_state_dict_robust(model, path, device):
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Weight file not found: {path}")
+        
     state_dict = torch.load(path, map_location=device)
+    model_dict = model.state_dict()
     new_state_dict = {}
     
+    # Match keys intelligently
+    matched_count = 0
     for k, v in state_dict.items():
-        new_state_dict[fix_key(k)] = v
+        new_key = fix_key(k)
         
-    try:
-        model.load_state_dict(new_state_dict, strict=True)
-    except RuntimeError:
-        print("Warning: Strict loading failed. Retrying with strict=False.")
-        model.load_state_dict(new_state_dict, strict=False)
+        # Check if the fixed key exists in the model
+        if new_key in model_dict:
+            # Check shape compatibility
+            if v.shape == model_dict[new_key].shape:
+                new_state_dict[new_key] = v
+                matched_count += 1
+            else:
+                print(f"Skipping {new_key}: Shape mismatch {v.shape} vs {model_dict[new_key].shape}")
+        else:
+            # Handle missing keys (sometimes FC layers have different names)
+            # Try adding/removing prefixes if direct match failed
+            if not new_key.startswith("base_model.") and "base_model." + new_key in model_dict:
+                new_key = "base_model." + new_key
+                new_state_dict[new_key] = v
+                matched_count += 1
+
+    if matched_count == 0:
+        raise RuntimeError(f"CRITICAL FAILURE: No weights were loaded from {path}. Key mismatch.")
+
+    print(f"Successfully matched {matched_count} layers.")
+    
+    # Load with strict=False only after ensuring we have matched keys
+    model.load_state_dict(new_state_dict, strict=False)
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
     seed_everything(cfg.training.seed)
     device = torch.device(cfg.training.device if torch.cuda.is_available() else "cpu")
     
+    wandb_config = OmegaConf.to_container(cfg, resolve=True)
+    wandb.init(project=cfg.wandb.project, config=wandb_config, job_type="test", name="final_evaluation")
+
     print(f"Initializing Model: {cfg.model.name}")
-    _, _, test_loader = get_dataloaders(cfg)
     
+    # Model Factory
     if cfg.model.name == "resnet50":
         model = WildfireResNet(num_classes=2, pretrained=cfg.model.pretrained, dropout=cfg.model.dropout)
     elif cfg.model.name == "simple_cnn":
@@ -47,22 +76,25 @@ def main(cfg: DictConfig):
     else:
         raise ValueError(f"Unknown model: {cfg.model.name}")
 
+    # Load Weights
     load_path = cfg.get("model_path", "best_model.pth")
     
+    # Fallback search
     if not os.path.exists(load_path):
         try:
             load_path = os.path.join(hydra.utils.get_original_cwd(), "best_model.pth")
         except:
             pass
 
-    if not os.path.exists(load_path):
-        raise FileNotFoundError(f"CRITICAL ERROR: Weight file not found at: {load_path}")
-
     print(f"Loading weights from: {load_path}")
     model.to(device)
     load_state_dict_robust(model, load_path, device)
     model.eval()
 
+    # Data Loading
+    print("Loading Test Data...")
+    _, _, test_loader = get_dataloaders(cfg)
+    
     all_preds = []
     all_labels = []
     
@@ -75,6 +107,7 @@ def main(cfg: DictConfig):
             all_preds.extend(predicted.cpu().numpy())
             all_labels.extend(labels.numpy())
 
+    # Metrics
     accuracy = accuracy_score(all_labels, all_preds)
     precision = precision_score(all_labels, all_preds, average='binary', pos_label=1)
     recall = recall_score(all_labels, all_preds, average='binary', pos_label=1)
@@ -93,6 +126,7 @@ def main(cfg: DictConfig):
     report = classification_report(all_labels, all_preds, target_names=["No Wildfire", "Wildfire"])
     print(report)
 
+    # Confusion Matrix
     cm = confusion_matrix(all_labels, all_preds)
     plt.figure(figsize=(6, 5))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
@@ -104,6 +138,16 @@ def main(cfg: DictConfig):
     plt.tight_layout()
     plt.savefig("confusion_matrix.png")
     print("Confusion Matrix saved to confusion_matrix.png")
+    
+    wandb.log({
+        "test_accuracy": accuracy,
+        "test_precision": precision,
+        "test_recall": recall,
+        "test_f1": f1,
+        "confusion_matrix": wandb.Image("confusion_matrix.png"),
+    })
+    
+    wandb.finish()
 
 if __name__ == "__main__":
     main()
