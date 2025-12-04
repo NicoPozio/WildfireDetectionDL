@@ -1,4 +1,3 @@
-%%writefile /content/WildfireDetectionDL/src/dataset.py
 import os
 import torch
 import glob
