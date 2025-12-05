@@ -20,7 +20,13 @@ def main(cfg: DictConfig):
     
     config_dict = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
     print("DEBUG: Initializing WandB...")
-    run = wandb.init(project=cfg.wandb.project, config=config_dict, mode=cfg.wandb.mode)
+    run = wandb.init(
+        project=cfg.wandb.project, 
+        config=config_dict, 
+        mode=cfg.wandb.mode,
+        name=cfg.wandb.get("name", None),   
+        group=cfg.wandb.get("group", None)  
+    )
     print("DEBUG: WandB Initialized.")
     
     device = torch.device(cfg.training.device if torch.cuda.is_available() else "cpu")
